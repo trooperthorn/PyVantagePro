@@ -1,6 +1,11 @@
 Changelog
 ---------
 
+Version 0.3.28
+~~~~~~~~~~~~~
+
+- Fixed extra temp, leaf temp and soil temp values correction
+
 Version 0.3.12
 ~~~~~~~~~~~~~
 

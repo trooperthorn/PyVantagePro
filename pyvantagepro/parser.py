@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-'''
-    pyvantagepro.parser
-    -------------------
+"""
+pyvantagepro.parser
+-------------------
 
-    Allows parsing Vantage Pro2 data.
+Allows parsing Vantage Pro2 data.
 
-    Original Author: Patrick C. McGinty (pyweather@tuxcoder.com)
-    :copyright: Copyright 2012 Salem Harrache and contributors, see AUTHORS.
-    :license: GNU GPL v3.
+Original Author: Patrick C. McGinty (pyweather@tuxcoder.com)
+:copyright: Copyright 2012 Salem Harrache and contributors, see AUTHORS.
+:license: GNU GPL v3.
 
-'''
+"""
+
 from __future__ import division, unicode_literals
 import struct
 from datetime import datetime
@@ -17,43 +18,277 @@ from array import array
 
 from .compat import bytes
 from .logger import LOGGER
-from .utils import (cached_property, bytes_to_hex, Dict, bytes_to_binary,
-                    binary_to_int, word_to_binary)
+from .utils import (
+    cached_property,
+    bytes_to_hex,
+    Dict,
+    bytes_to_binary,
+    binary_to_int,
+    word_to_binary,
+)
 
 
 class VantageProCRC(object):
-    '''Implements CRC algorithm, necessary for encoding and verifying data from
-    the Davis Vantage Pro unit.'''
+    """Implements CRC algorithm, necessary for encoding and verifying data from
+    the Davis Vantage Pro unit."""
+
     CRC_TABLE = (
-        0x0,    0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7, 0x8108,
-        0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef, 0x1231, 0x210,
-        0x3273, 0x2252, 0x52b5, 0x4294, 0x72f7, 0x62d6, 0x9339, 0x8318, 0xb37b,
-        0xa35a, 0xd3bd, 0xc39c, 0xf3ff, 0xe3de, 0x2462, 0x3443, 0x420,  0x1401,
-        0x64e6, 0x74c7, 0x44a4, 0x5485, 0xa56a, 0xb54b, 0x8528, 0x9509, 0xe5ee,
-        0xf5cf, 0xc5ac, 0xd58d, 0x3653, 0x2672, 0x1611, 0x630,  0x76d7, 0x66f6,
-        0x5695, 0x46b4, 0xb75b, 0xa77a, 0x9719, 0x8738, 0xf7df, 0xe7fe, 0xd79d,
-        0xc7bc, 0x48c4, 0x58e5, 0x6886, 0x78a7, 0x840,  0x1861, 0x2802, 0x3823,
-        0xc9cc, 0xd9ed, 0xe98e, 0xf9af, 0x8948, 0x9969, 0xa90a, 0xb92b, 0x5af5,
-        0x4ad4, 0x7ab7, 0x6a96, 0x1a71, 0xa50,  0x3a33, 0x2a12, 0xdbfd, 0xcbdc,
-        0xfbbf, 0xeb9e, 0x9b79, 0x8b58, 0xbb3b, 0xab1a, 0x6ca6, 0x7c87, 0x4ce4,
-        0x5cc5, 0x2c22, 0x3c03, 0xc60,  0x1c41, 0xedae, 0xfd8f, 0xcdec, 0xddcd,
-        0xad2a, 0xbd0b, 0x8d68, 0x9d49, 0x7e97, 0x6eb6, 0x5ed5, 0x4ef4, 0x3e13,
-        0x2e32, 0x1e51, 0xe70,  0xff9f, 0xefbe, 0xdfdd, 0xcffc, 0xbf1b, 0xaf3a,
-        0x9f59, 0x8f78, 0x9188, 0x81a9, 0xb1ca, 0xa1eb, 0xd10c, 0xc12d, 0xf14e,
-        0xe16f, 0x1080, 0xa1,   0x30c2, 0x20e3, 0x5004, 0x4025, 0x7046, 0x6067,
-        0x83b9, 0x9398, 0xa3fb, 0xb3da, 0xc33d, 0xd31c, 0xe37f, 0xf35e, 0x2b1,
-        0x1290, 0x22f3, 0x32d2, 0x4235, 0x5214, 0x6277, 0x7256, 0xb5ea, 0xa5cb,
-        0x95a8, 0x8589, 0xf56e, 0xe54f, 0xd52c, 0xc50d, 0x34e2, 0x24c3, 0x14a0,
-        0x481,  0x7466, 0x6447, 0x5424, 0x4405, 0xa7db, 0xb7fa, 0x8799, 0x97b8,
-        0xe75f, 0xf77e, 0xc71d, 0xd73c, 0x26d3, 0x36f2, 0x691,  0x16b0, 0x6657,
-        0x7676, 0x4615, 0x5634, 0xd94c, 0xc96d, 0xf90e, 0xe92f, 0x99c8, 0x89e9,
-        0xb98a, 0xa9ab, 0x5844, 0x4865, 0x7806, 0x6827, 0x18c0, 0x8e1,  0x3882,
-        0x28a3, 0xcb7d, 0xdb5c, 0xeb3f, 0xfb1e, 0x8bf9, 0x9bd8, 0xabbb, 0xbb9a,
-        0x4a75, 0x5a54, 0x6a37, 0x7a16, 0xaf1,  0x1ad0, 0x2ab3, 0x3a92, 0xfd2e,
-        0xed0f, 0xdd6c, 0xcd4d, 0xbdaa, 0xad8b, 0x9de8, 0x8dc9, 0x7c26, 0x6c07,
-        0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0xcc1,  0xef1f, 0xff3e, 0xcf5d,
-        0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8, 0x6e17, 0x7e36, 0x4e55, 0x5e74,
-        0x2e93, 0x3eb2, 0xed1,  0x1ef0,
+        0x0,
+        0x1021,
+        0x2042,
+        0x3063,
+        0x4084,
+        0x50A5,
+        0x60C6,
+        0x70E7,
+        0x8108,
+        0x9129,
+        0xA14A,
+        0xB16B,
+        0xC18C,
+        0xD1AD,
+        0xE1CE,
+        0xF1EF,
+        0x1231,
+        0x210,
+        0x3273,
+        0x2252,
+        0x52B5,
+        0x4294,
+        0x72F7,
+        0x62D6,
+        0x9339,
+        0x8318,
+        0xB37B,
+        0xA35A,
+        0xD3BD,
+        0xC39C,
+        0xF3FF,
+        0xE3DE,
+        0x2462,
+        0x3443,
+        0x420,
+        0x1401,
+        0x64E6,
+        0x74C7,
+        0x44A4,
+        0x5485,
+        0xA56A,
+        0xB54B,
+        0x8528,
+        0x9509,
+        0xE5EE,
+        0xF5CF,
+        0xC5AC,
+        0xD58D,
+        0x3653,
+        0x2672,
+        0x1611,
+        0x630,
+        0x76D7,
+        0x66F6,
+        0x5695,
+        0x46B4,
+        0xB75B,
+        0xA77A,
+        0x9719,
+        0x8738,
+        0xF7DF,
+        0xE7FE,
+        0xD79D,
+        0xC7BC,
+        0x48C4,
+        0x58E5,
+        0x6886,
+        0x78A7,
+        0x840,
+        0x1861,
+        0x2802,
+        0x3823,
+        0xC9CC,
+        0xD9ED,
+        0xE98E,
+        0xF9AF,
+        0x8948,
+        0x9969,
+        0xA90A,
+        0xB92B,
+        0x5AF5,
+        0x4AD4,
+        0x7AB7,
+        0x6A96,
+        0x1A71,
+        0xA50,
+        0x3A33,
+        0x2A12,
+        0xDBFD,
+        0xCBDC,
+        0xFBBF,
+        0xEB9E,
+        0x9B79,
+        0x8B58,
+        0xBB3B,
+        0xAB1A,
+        0x6CA6,
+        0x7C87,
+        0x4CE4,
+        0x5CC5,
+        0x2C22,
+        0x3C03,
+        0xC60,
+        0x1C41,
+        0xEDAE,
+        0xFD8F,
+        0xCDEC,
+        0xDDCD,
+        0xAD2A,
+        0xBD0B,
+        0x8D68,
+        0x9D49,
+        0x7E97,
+        0x6EB6,
+        0x5ED5,
+        0x4EF4,
+        0x3E13,
+        0x2E32,
+        0x1E51,
+        0xE70,
+        0xFF9F,
+        0xEFBE,
+        0xDFDD,
+        0xCFFC,
+        0xBF1B,
+        0xAF3A,
+        0x9F59,
+        0x8F78,
+        0x9188,
+        0x81A9,
+        0xB1CA,
+        0xA1EB,
+        0xD10C,
+        0xC12D,
+        0xF14E,
+        0xE16F,
+        0x1080,
+        0xA1,
+        0x30C2,
+        0x20E3,
+        0x5004,
+        0x4025,
+        0x7046,
+        0x6067,
+        0x83B9,
+        0x9398,
+        0xA3FB,
+        0xB3DA,
+        0xC33D,
+        0xD31C,
+        0xE37F,
+        0xF35E,
+        0x2B1,
+        0x1290,
+        0x22F3,
+        0x32D2,
+        0x4235,
+        0x5214,
+        0x6277,
+        0x7256,
+        0xB5EA,
+        0xA5CB,
+        0x95A8,
+        0x8589,
+        0xF56E,
+        0xE54F,
+        0xD52C,
+        0xC50D,
+        0x34E2,
+        0x24C3,
+        0x14A0,
+        0x481,
+        0x7466,
+        0x6447,
+        0x5424,
+        0x4405,
+        0xA7DB,
+        0xB7FA,
+        0x8799,
+        0x97B8,
+        0xE75F,
+        0xF77E,
+        0xC71D,
+        0xD73C,
+        0x26D3,
+        0x36F2,
+        0x691,
+        0x16B0,
+        0x6657,
+        0x7676,
+        0x4615,
+        0x5634,
+        0xD94C,
+        0xC96D,
+        0xF90E,
+        0xE92F,
+        0x99C8,
+        0x89E9,
+        0xB98A,
+        0xA9AB,
+        0x5844,
+        0x4865,
+        0x7806,
+        0x6827,
+        0x18C0,
+        0x8E1,
+        0x3882,
+        0x28A3,
+        0xCB7D,
+        0xDB5C,
+        0xEB3F,
+        0xFB1E,
+        0x8BF9,
+        0x9BD8,
+        0xABBB,
+        0xBB9A,
+        0x4A75,
+        0x5A54,
+        0x6A37,
+        0x7A16,
+        0xAF1,
+        0x1AD0,
+        0x2AB3,
+        0x3A92,
+        0xFD2E,
+        0xED0F,
+        0xDD6C,
+        0xCD4D,
+        0xBDAA,
+        0xAD8B,
+        0x9DE8,
+        0x8DC9,
+        0x7C26,
+        0x6C07,
+        0x5C64,
+        0x4C45,
+        0x3CA2,
+        0x2C83,
+        0x1CE0,
+        0xCC1,
+        0xEF1F,
+        0xFF3E,
+        0xCF5D,
+        0xDF7C,
+        0xAF9B,
+        0xBFBA,
+        0x8FD9,
+        0x9FF8,
+        0x6E17,
+        0x7E36,
+        0x4E55,
+        0x5E74,
+        0x2E93,
+        0x3EB2,
+        0xED1,
+        0x1EF0,
     )
 
     def __init__(self, data):
@@ -61,21 +296,21 @@ class VantageProCRC(object):
 
     @cached_property
     def checksum(self):
-        '''Return CRC calc value from raw serial data.'''
+        """Return CRC calc value from raw serial data."""
         crc = 0
-        for byte in array(str('B'), bytes(self.data)):
-            crc = (self.CRC_TABLE[((crc >> 8) ^ byte)] ^ ((crc & 0xFF) << 8))
+        for byte in array(str("B"), bytes(self.data)):
+            crc = self.CRC_TABLE[((crc >> 8) ^ byte)] ^ ((crc & 0xFF) << 8)
         return crc
 
     @cached_property
     def data_with_checksum(self):
-        '''Return packed raw CRC from raw data.'''
-        checksum = struct.pack(b'>H', self.checksum)
-        return b''.join([self.data, checksum])
+        """Return packed raw CRC from raw data."""
+        checksum = struct.pack(b">H", self.checksum)
+        return b"".join([self.data, checksum])
 
     def check(self):
-        '''Perform CRC check on raw serial data, return true if valid.
-        A valid CRC == 0.'''
+        """Perform CRC check on raw serial data, return true if valid.
+        A valid CRC == 0."""
         if len(self.data) != 0 and self.checksum == 0:
             LOGGER.info("Check CRC : OK")
             return True
@@ -85,22 +320,22 @@ class VantageProCRC(object):
 
 
 class DataParser(Dict):
-    '''Implements a reusable class for working with a binary data structure.
-    It provides a named fields interface, similiar to C structures.'''
+    """Implements a reusable class for working with a binary data structure.
+    It provides a named fields interface, similiar to C structures."""
 
-    def __init__(self, data, data_format, order='='):
+    def __init__(self, data, data_format, order="="):
         super(DataParser, self).__init__()
         self.fields, format_t = zip(*data_format)
         self.crc_error = False
         if "CRC" in self.fields:
             self.crc_error = not VantageProCRC(data).check()
-        format_t = str("%s%s" % (order, ''.join(format_t)))
+        format_t = str("%s%s" % (order, "".join(format_t)))
         self.struct = struct.Struct(format=format_t)
         # save raw_bytes
         self.raw_bytes = data
         # Unpacks data from `raw_bytes` and returns a dication of named fields
         data = self.struct.unpack_from(self.raw_bytes, 0)
-        self['Datetime'] = None
+        self["Datetime"] = None
         self.update(Dict(zip(self.fields, data)))
 
     @cached_property
@@ -108,7 +343,7 @@ class DataParser(Dict):
         return bytes_to_hex(self.raw_bytes)
 
     def tuple_to_dict(self, key):
-        '''Convert {key<->tuple} to {key1<->value2, key2<->value2 ... }.'''
+        """Convert {key<->tuple} to {key1<->value2, key2<->value2 ... }."""
         for i, value in enumerate(self[key]):
             self["%s%.2d" % (key, i + 1)] = value
         del self[key]
@@ -125,121 +360,153 @@ class DataParser(Dict):
 
 
 class LoopDataParserRevB(DataParser):
-    '''Parse data returned by the 'LOOP' command. It contains all of the
-    real-time data that can be read from the Davis VantagePro2.'''
+    """Parse data returned by the 'LOOP' command. It contains all of the
+    real-time data that can be read from the Davis VantagePro2."""
+
     # Loop data format (RevB)
     LOOP_FORMAT = (
-        ('LOO', '3s'), ('BarTrend', 'B'), ('PacketType', 'B'),
-        ('NextRec', 'H'), ('Barometer', 'H'), ('TempIn', 'h'),
-        ('HumIn', 'B'), ('TempOut', 'h'), ('WindSpeed', 'B'),
-        ('WindSpeed10Min', 'B'), ('WindDir', 'H'), ('ExtraTemps', '7s'),
-        ('SoilTemps', '4s'), ('LeafTemps', '4s'), ('HumOut', 'B'),
-        ('HumExtra', '7s'), ('RainRate', 'H'), ('UV', 'B'),
-        ('SolarRad', 'H'), ('RainStorm', 'H'), ('StormStartDate', 'H'),
-        ('RainDay', 'H'), ('RainMonth', 'H'), ('RainYear', 'H'),
-        ('ETDay', 'H'), ('ETMonth', 'H'), ('ETYear', 'H'),
-        ('SoilMoist', '4s'), ('LeafWetness', '4s'), ('AlarmIn', 'B'),
-        ('AlarmRain', 'B'), ('AlarmOut', '2s'), ('AlarmExTempHum', '8s'),
-        ('AlarmSoilLeaf', '4s'), ('BatteryStatus', 'B'), ('BatteryVolts', 'H'),
-        ('ForecastIcon', 'B'), ('ForecastRuleNo', 'B'), ('SunRise', 'H'),
-        ('SunSet', 'H'), ('EOL', '2s'), ('CRC', 'H'),
+        ("LOO", "3s"),
+        ("BarTrend", "B"),
+        ("PacketType", "B"),
+        ("NextRec", "H"),
+        ("Barometer", "H"),
+        ("TempIn", "h"),
+        ("HumIn", "B"),
+        ("TempOut", "h"),
+        ("WindSpeed", "B"),
+        ("WindSpeed10Min", "B"),
+        ("WindDir", "H"),
+        ("ExtraTemps", "7s"),
+        ("SoilTemps", "4s"),
+        ("LeafTemps", "4s"),
+        ("HumOut", "B"),
+        ("HumExtra", "7s"),
+        ("RainRate", "H"),
+        ("UV", "B"),
+        ("SolarRad", "H"),
+        ("RainStorm", "H"),
+        ("StormStartDate", "H"),
+        ("RainDay", "H"),
+        ("RainMonth", "H"),
+        ("RainYear", "H"),
+        ("ETDay", "H"),
+        ("ETMonth", "H"),
+        ("ETYear", "H"),
+        ("SoilMoist", "4s"),
+        ("LeafWetness", "4s"),
+        ("AlarmIn", "B"),
+        ("AlarmRain", "B"),
+        ("AlarmOut", "2s"),
+        ("AlarmExTempHum", "8s"),
+        ("AlarmSoilLeaf", "4s"),
+        ("BatteryStatus", "B"),
+        ("BatteryVolts", "H"),
+        ("ForecastIcon", "B"),
+        ("ForecastRuleNo", "B"),
+        ("SunRise", "H"),
+        ("SunSet", "H"),
+        ("EOL", "2s"),
+        ("CRC", "H"),
     )
 
     def __init__(self, data, dtime):
         super(LoopDataParserRevB, self).__init__(data, self.LOOP_FORMAT)
-        self['Datetime'] = dtime
-        self['Barometer'] = self['Barometer'] / 1000
-        self['TempIn'] = self['TempIn'] / 10
-        self['TempOut'] = self['TempOut'] / 10
-        self['RainRate'] = self['RainRate'] / 100
-        self['RainStorm'] = self['RainStorm'] / 100
-        self['UV'] = self['UV'] / 10
+        self["Datetime"] = dtime
+        self["Barometer"] = self["Barometer"] / 1000
+        self["TempIn"] = self["TempIn"] / 10
+        self["TempOut"] = self["TempOut"] / 10
+        self["RainRate"] = self["RainRate"] / 100
+        self["RainStorm"] = self["RainStorm"] / 100
+        self["UV"] = self["UV"] / 10
         # Given a packed storm date field, unpack and return date
-        self['StormStartDate'] = self.unpack_storm_date(self['StormStartDate'])
+        self["StormStartDate"] = self.unpack_storm_date(self["StormStartDate"])
         # rain totals
-        self['RainDay'] = self['RainDay'] / 100
-        self['RainMonth'] = self['RainMonth'] / 100
-        self['RainYear'] = self['RainYear'] / 100
+        self["RainDay"] = self["RainDay"] / 100
+        self["RainMonth"] = self["RainMonth"] / 100
+        self["RainYear"] = self["RainYear"] / 100
         # evapotranspiration totals
-        self['ETDay'] = self['ETDay'] / 1000
-        self['ETMonth'] = self['ETMonth'] / 100
-        self['ETYear'] = self['ETYear'] / 100
+        self["ETDay"] = self["ETDay"] / 1000
+        self["ETMonth"] = self["ETMonth"] / 100
+        self["ETYear"] = self["ETYear"] / 100
         # battery statistics
-        self['BatteryVolts'] = self['BatteryVolts'] * 300 / 512 / 100
+        self["BatteryVolts"] = self["BatteryVolts"] * 300 / 512 / 100
         # sunrise / sunset
-        self['SunRise'] = self.unpack_time(self['SunRise'])
-        self['SunSet'] = self.unpack_time(self['SunSet'])
+        self["SunRise"] = self.unpack_time(self["SunRise"])
+        self["SunSet"] = self.unpack_time(self["SunSet"])
         # convert to int
-        self['HumExtra'] = struct.unpack(b'7B', self['HumExtra'])
-        self['ExtraTemps'] = struct.unpack(b'7B', self['ExtraTemps'])
-        self['SoilMoist'] = struct.unpack(b'4B', self['SoilMoist'])
-        self['SoilTemps'] = struct.unpack(b'4B', self['SoilTemps'])
-        self['LeafWetness'] = struct.unpack(b'4B', self['LeafWetness'])
-        self['LeafTemps'] = struct.unpack(b'4B', self['LeafTemps'])
+        self["HumExtra"] = struct.unpack(b"7B", self["HumExtra"])
+        ExtraTempsValues = struct.unpack(b"7B", self["ExtraTemps"])
+        self["ExtraTemps"] = tuple((t - 90) for t in ExtraTempsValues)
+        self["SoilMoist"] = struct.unpack(b"4B", self["SoilMoist"])
+        SoilTempsValues = struct.unpack(b"4B", self["SoilTemps"])
+        self["SoilTemps"] = tuple((t - 90) for t in SoilTempsValues)
+        self["LeafWetness"] = struct.unpack(b"4B", self["LeafWetness"])
+        LeafTempsValues = struct.unpack(b"4B", self["LeafTemps"])
+        self["LeafTemps"] = tuple((t - 90) for t in LeafTempsValues)
 
         # Inside Alarms bits extraction, only 7 bits are used
-        self['AlarmIn'] = bytes_to_binary(self.raw_bytes[70])
-        self['AlarmInFallBarTrend'] = int(self['AlarmIn'][0])
-        self['AlarmInRisBarTrend'] = int(self['AlarmIn'][1])
-        self['AlarmInLowTemp'] = int(self['AlarmIn'][2])
-        self['AlarmInHighTemp'] = int(self['AlarmIn'][3])
-        self['AlarmInLowHum'] = int(self['AlarmIn'][4])
-        self['AlarmInHighHum'] = int(self['AlarmIn'][5])
-        self['AlarmInTime'] = int(self['AlarmIn'][6])
-        del self['AlarmIn']
+        self["AlarmIn"] = bytes_to_binary(self.raw_bytes[70])
+        self["AlarmInFallBarTrend"] = int(self["AlarmIn"][0])
+        self["AlarmInRisBarTrend"] = int(self["AlarmIn"][1])
+        self["AlarmInLowTemp"] = int(self["AlarmIn"][2])
+        self["AlarmInHighTemp"] = int(self["AlarmIn"][3])
+        self["AlarmInLowHum"] = int(self["AlarmIn"][4])
+        self["AlarmInHighHum"] = int(self["AlarmIn"][5])
+        self["AlarmInTime"] = int(self["AlarmIn"][6])
+        del self["AlarmIn"]
         # Rain Alarms bits extraction, only 5 bits are used
-        self['AlarmRain'] = bytes_to_binary(self.raw_bytes[71])
-        self['AlarmRainHighRate'] = int(self['AlarmRain'][0])
-        self['AlarmRain15min'] = int(self['AlarmRain'][1])
-        self['AlarmRain24hour'] = int(self['AlarmRain'][2])
-        self['AlarmRainStormTotal'] = int(self['AlarmRain'][3])
-        self['AlarmRainETDaily'] = int(self['AlarmRain'][4])
-        del self['AlarmRain']
+        self["AlarmRain"] = bytes_to_binary(self.raw_bytes[71])
+        self["AlarmRainHighRate"] = int(self["AlarmRain"][0])
+        self["AlarmRain15min"] = int(self["AlarmRain"][1])
+        self["AlarmRain24hour"] = int(self["AlarmRain"][2])
+        self["AlarmRainStormTotal"] = int(self["AlarmRain"][3])
+        self["AlarmRainETDaily"] = int(self["AlarmRain"][4])
+        del self["AlarmRain"]
         # Oustide Alarms bits extraction, only 13 bits are used
-        self['AlarmOut'] = bytes_to_binary(self.raw_bytes[72])
-        self['AlarmOutLowTemp'] = int(self['AlarmOut'][0])
-        self['AlarmOutHighTemp'] = int(self['AlarmOut'][1])
-        self['AlarmOutWindSpeed'] = int(self['AlarmOut'][2])
-        self['AlarmOut10minAvgSpeed'] = int(self['AlarmOut'][3])
-        self['AlarmOutLowDewpoint'] = int(self['AlarmOut'][4])
-        self['AlarmOutHighDewPoint'] = int(self['AlarmOut'][5])
-        self['AlarmOutHighHeat'] = int(self['AlarmOut'][6])
-        self['AlarmOutLowWindChill'] = int(self['AlarmOut'][7])
-        self['AlarmOut'] = bytes_to_binary(self.raw_bytes[73])
-        self['AlarmOutHighTHSW'] = int(self['AlarmOut'][0])
-        self['AlarmOutHighSolarRad'] = int(self['AlarmOut'][1])
-        self['AlarmOutHighUV'] = int(self['AlarmOut'][2])
-        self['AlarmOutUVDose'] = int(self['AlarmOut'][3])
-        self['AlarmOutUVDoseEnabled'] = int(self['AlarmOut'][4])
-        del self['AlarmOut']
+        self["AlarmOut"] = bytes_to_binary(self.raw_bytes[72])
+        self["AlarmOutLowTemp"] = int(self["AlarmOut"][0])
+        self["AlarmOutHighTemp"] = int(self["AlarmOut"][1])
+        self["AlarmOutWindSpeed"] = int(self["AlarmOut"][2])
+        self["AlarmOut10minAvgSpeed"] = int(self["AlarmOut"][3])
+        self["AlarmOutLowDewpoint"] = int(self["AlarmOut"][4])
+        self["AlarmOutHighDewPoint"] = int(self["AlarmOut"][5])
+        self["AlarmOutHighHeat"] = int(self["AlarmOut"][6])
+        self["AlarmOutLowWindChill"] = int(self["AlarmOut"][7])
+        self["AlarmOut"] = bytes_to_binary(self.raw_bytes[73])
+        self["AlarmOutHighTHSW"] = int(self["AlarmOut"][0])
+        self["AlarmOutHighSolarRad"] = int(self["AlarmOut"][1])
+        self["AlarmOutHighUV"] = int(self["AlarmOut"][2])
+        self["AlarmOutUVDose"] = int(self["AlarmOut"][3])
+        self["AlarmOutUVDoseEnabled"] = int(self["AlarmOut"][4])
+        del self["AlarmOut"]
         # AlarmExTempHum bits extraction, only 3 bits are used, but 7 bytes
         for i in range(1, 8):
             data = self.raw_bytes[74 + i]
-            self['AlarmExTempHum'] = bytes_to_binary(data)
-            self['AlarmEx%.2dLowTemp' % i] = int(self['AlarmExTempHum'][0])
-            self['AlarmEx%.2dHighTemp' % i] = int(self['AlarmExTempHum'][1])
-            self['AlarmEx%.2dLowHum' % i] = int(self['AlarmExTempHum'][2])
-            self['AlarmEx%.2dHighHum' % i] = int(self['AlarmExTempHum'][3])
-        del self['AlarmExTempHum']
+            self["AlarmExTempHum"] = bytes_to_binary(data)
+            self["AlarmEx%.2dLowTemp" % i] = int(self["AlarmExTempHum"][0])
+            self["AlarmEx%.2dHighTemp" % i] = int(self["AlarmExTempHum"][1])
+            self["AlarmEx%.2dLowHum" % i] = int(self["AlarmExTempHum"][2])
+            self["AlarmEx%.2dHighHum" % i] = int(self["AlarmExTempHum"][3])
+        del self["AlarmExTempHum"]
         # AlarmSoilLeaf 8bits, 4 bytes
         for i in range(1, 5):
             data = self.raw_bytes[81 + i]
-            self['AlarmSoilLeaf'] = bytes_to_binary(data)
-            self['Alarm%.2dLowLeafWet' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dHighLeafWet' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dLowSoilMois' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dHighSoilMois' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dLowLeafTemp' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dHighLeafTemp' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dLowSoilTemp' % i] = int(self['AlarmSoilLeaf'][0])
-            self['Alarm%.2dHighSoilTemp' % i] = int(self['AlarmSoilLeaf'][0])
-        del self['AlarmSoilLeaf']
+            self["AlarmSoilLeaf"] = bytes_to_binary(data)
+            self["Alarm%.2dLowLeafWet" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dHighLeafWet" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dLowSoilMois" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dHighSoilMois" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dLowLeafTemp" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dHighLeafTemp" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dLowSoilTemp" % i] = int(self["AlarmSoilLeaf"][0])
+            self["Alarm%.2dHighSoilTemp" % i] = int(self["AlarmSoilLeaf"][0])
+        del self["AlarmSoilLeaf"]
         # delete unused values
-        del self['LOO']
-        del self['NextRec']
-        del self['PacketType']
-        del self['EOL']
-        del self['CRC']
+        del self["LOO"]
+        del self["NextRec"]
+        del self["PacketType"]
+        del self["EOL"]
+        del self["CRC"]
         # Tuple to dict
         self.tuple_to_dict("ExtraTemps")
         self.tuple_to_dict("LeafTemps")
@@ -249,7 +516,7 @@ class LoopDataParserRevB(DataParser):
         self.tuple_to_dict("SoilMoist")
 
     def unpack_storm_date(self, date):
-        '''Given a packed storm date field, unpack and return date.'''    
+        """Given a packed storm date field, unpack and return date."""
         b = word_to_binary(date)
 
         year = binary_to_int(b, 0, 7) + 2000
@@ -258,168 +525,212 @@ class LoopDataParserRevB(DataParser):
 
         return "%d-%0.2d-%0.2d" % (year, month, day)
 
-
     def unpack_time(self, time):
-        '''Given a packed time field, unpack and return "HH:MM" string.'''
+        """Given a packed time field, unpack and return "HH:MM" string."""
         # format: HHMM, and space padded on the left.ex: "601" is 6:01 AM
         return "%02d:%02d" % divmod(time, 100)  # covert to "06:01"
 
+
 class HighLowParserRevB(DataParser):
-    '''Parse data returned by the 'HILOWS' command. It contains all of the
-    real-time data that can be read from the Davis VantagePro2.'''
+    """Parse data returned by the 'HILOWS' command. It contains all of the
+    real-time data that can be read from the Davis VantagePro2."""
+
     # Loop data format (RevB)
     HILOWS_FORMAT = (
-        ('BaroLoDay', 'H'), ('BaroHiDay', 'H'),
-        ('BaroLoMonth', 'H'), ('BaroHiMonth', 'H'),
-        ('BaroLoYear', 'H'), ('BaroHiYear', 'H'),
-        ('BaroLoTime', 'H'), ('BaroHiTime', 'H'),
-
-        ('WindHiDay', 'B'), ('WindHiTime', 'H'),
-        ('WindHiMonth', 'B'), ('WindHiYear', 'B'),
-
-        ('InTempHiDay', 'H'), ('InTempLoDay', 'H'),
-        ('InTempHiTime', 'H'), ('InTempLoTime', 'H'),
-        ('InTempLoMonth', 'H'), ('InTempHiMonth', 'H'),
-        ('InTempLoYear', 'H'), ('InTempHiYear', 'H'),
-
-        ('InHumHiDay', 'B'), ('InHumLoDay', 'B'),
-        ('InHumHiTime', 'H'), ('InHumLoTime', 'H'),
-        ('InHumHiMonth', 'B'), ('InHumLoMonth', 'B'),
-        ('InHumHiYear', 'B'), ('InHumLoYear', 'B'),
-
-        ('TempLoDay', 'h'), ('TempHiDay', 'h'),
-        ('TempLoTime', 'H'), ('TempHiTime', 'H'),
-        ('TempHiMonth', 'h'), ('TempLoMonth', 'h'),
-        ('TempHiYear', 'h'), ('TempLoYear', 'h'),
-
-        ('DewLoDay', 'h'), ('DewHiDay', 'h'),
-        ('DewLoTime', 'H'), ('DewHiTime', 'H'),
-        ('DewHiMonth', 'h'), ('DewLoMonth', 'h'),
-        ('DewHiYear', 'h'), ('DewLoYear', 'h'),
-
-        ('ChillLoDay', 'h'), ('ChillLoTime', 'H'),
-        ('ChillLoMonth', 'h'), ('ChillLoYear', 'h'),
-
-        ('HeatHiDay', 'h'), ('HeatHiTime', 'H'),
-        ('HeatHiMonth', 'h'), ('HeatHiYear', 'h'),
-
-        ('THSWHiDay', 'h'), ('THSWHiTime', 'H'),
-        ('THSWHiMonth', 'h'), ('THSWHiYear', 'h'),
-
-        ('SolarHiDay', 'H'), ('SolarHiTime', 'H'),
-        ('SolarHiMonth', 'H'), ('SolarHiYear', 'H'),
-
-        ('UVHiDay', 'B'), ('UVHiTime', 'H'),
-        ('UVHiMonth', 'B'), ('UVHiYear', 'B'),
-
-        ('RainHiDay', 'H'), ('RainHiTime', 'H'),
-        ('RainHiHour', 'H'), ('RainHiMonth', 'H'),
-        ('RainHiYear', 'H'),
-
-        ('ExtraLeaf', '150s'), ('ExtraTemps', '80s'),
-        ('SoilMoist', '40s'), ('LeafWet', '40s'),
-        ('CRC', 'H')
+        ("BaroLoDay", "H"),
+        ("BaroHiDay", "H"),
+        ("BaroLoMonth", "H"),
+        ("BaroHiMonth", "H"),
+        ("BaroLoYear", "H"),
+        ("BaroHiYear", "H"),
+        ("BaroLoTime", "H"),
+        ("BaroHiTime", "H"),
+        ("WindHiDay", "B"),
+        ("WindHiTime", "H"),
+        ("WindHiMonth", "B"),
+        ("WindHiYear", "B"),
+        ("InTempHiDay", "H"),
+        ("InTempLoDay", "H"),
+        ("InTempHiTime", "H"),
+        ("InTempLoTime", "H"),
+        ("InTempLoMonth", "H"),
+        ("InTempHiMonth", "H"),
+        ("InTempLoYear", "H"),
+        ("InTempHiYear", "H"),
+        ("InHumHiDay", "B"),
+        ("InHumLoDay", "B"),
+        ("InHumHiTime", "H"),
+        ("InHumLoTime", "H"),
+        ("InHumHiMonth", "B"),
+        ("InHumLoMonth", "B"),
+        ("InHumHiYear", "B"),
+        ("InHumLoYear", "B"),
+        ("TempLoDay", "h"),
+        ("TempHiDay", "h"),
+        ("TempLoTime", "H"),
+        ("TempHiTime", "H"),
+        ("TempHiMonth", "h"),
+        ("TempLoMonth", "h"),
+        ("TempHiYear", "h"),
+        ("TempLoYear", "h"),
+        ("DewLoDay", "h"),
+        ("DewHiDay", "h"),
+        ("DewLoTime", "H"),
+        ("DewHiTime", "H"),
+        ("DewHiMonth", "h"),
+        ("DewLoMonth", "h"),
+        ("DewHiYear", "h"),
+        ("DewLoYear", "h"),
+        ("ChillLoDay", "h"),
+        ("ChillLoTime", "H"),
+        ("ChillLoMonth", "h"),
+        ("ChillLoYear", "h"),
+        ("HeatHiDay", "h"),
+        ("HeatHiTime", "H"),
+        ("HeatHiMonth", "h"),
+        ("HeatHiYear", "h"),
+        ("THSWHiDay", "h"),
+        ("THSWHiTime", "H"),
+        ("THSWHiMonth", "h"),
+        ("THSWHiYear", "h"),
+        ("SolarHiDay", "H"),
+        ("SolarHiTime", "H"),
+        ("SolarHiMonth", "H"),
+        ("SolarHiYear", "H"),
+        ("UVHiDay", "B"),
+        ("UVHiTime", "H"),
+        ("UVHiMonth", "B"),
+        ("UVHiYear", "B"),
+        ("RainHiDay", "H"),
+        ("RainHiTime", "H"),
+        ("RainHiHour", "H"),
+        ("RainHiMonth", "H"),
+        ("RainHiYear", "H"),
+        ("ExtraLeaf", "150s"),
+        ("ExtraTemps", "80s"),
+        ("SoilMoist", "40s"),
+        ("LeafWet", "40s"),
+        ("CRC", "H"),
     )
 
     def __init__(self, data, dtime):
         super(HighLowParserRevB, self).__init__(data, self.HILOWS_FORMAT)
-        self['Datetime'] = dtime
-        self['BaroLoDay'] /= 1000
-        self['BaroHiDay'] /= 1000
-        self['BaroLoMonth'] /= 1000
-        self['BaroHiMonth'] /= 1000
-        self['BaroLoYear'] /= 1000
-        self['BaroHiYear'] /= 1000
-        self['BaroLoTime'] = self.unpack_time(self['BaroLoTime'])
-        self['BaroHiTime'] = self.unpack_time(self['BaroHiTime'])
+        self["Datetime"] = dtime
+        self["BaroLoDay"] /= 1000
+        self["BaroHiDay"] /= 1000
+        self["BaroLoMonth"] /= 1000
+        self["BaroHiMonth"] /= 1000
+        self["BaroLoYear"] /= 1000
+        self["BaroHiYear"] /= 1000
+        self["BaroLoTime"] = self.unpack_time(self["BaroLoTime"])
+        self["BaroHiTime"] = self.unpack_time(self["BaroHiTime"])
 
-        self['WindHiTime'] = self.unpack_time(self['WindHiTime'])
+        self["WindHiTime"] = self.unpack_time(self["WindHiTime"])
 
-        self['InTempHiDay'] /= 10
-        self['InTempLoDay'] /= 10
-        self['InTempLoMonth'] /= 10
-        self['InTempHiMonth'] /= 10
-        self['InTempLoYear'] /= 10
-        self['InTempHiYear'] /= 10
+        self["InTempHiDay"] /= 10
+        self["InTempLoDay"] /= 10
+        self["InTempLoMonth"] /= 10
+        self["InTempHiMonth"] /= 10
+        self["InTempLoYear"] /= 10
+        self["InTempHiYear"] /= 10
 
-        self['TempLoDay'] /= 10
-        self['TempHiDay'] /= 10
-        self['TempHiMonth'] /= 10
-        self['TempLoMonth'] /= 10
-        self['TempHiYear'] /= 10
-        self['TempLoYear'] /= 10
-        self['TempLoTime'] = self.unpack_time(self['TempLoTime'])
-        self['TempHiTime'] = self.unpack_time(self['TempHiTime'])
+        self["TempLoDay"] /= 10
+        self["TempHiDay"] /= 10
+        self["TempHiMonth"] /= 10
+        self["TempLoMonth"] /= 10
+        self["TempHiYear"] /= 10
+        self["TempLoYear"] /= 10
+        self["TempLoTime"] = self.unpack_time(self["TempLoTime"])
+        self["TempHiTime"] = self.unpack_time(self["TempHiTime"])
 
-        self['DewLoTime'] = self.unpack_time(self['DewLoTime'])
-        self['DewHiTime'] = self.unpack_time(self['DewHiTime'])
+        self["DewLoTime"] = self.unpack_time(self["DewLoTime"])
+        self["DewHiTime"] = self.unpack_time(self["DewHiTime"])
 
-        self['SolarHiTime'] = self.unpack_time(self['SolarHiTime'])
+        self["SolarHiTime"] = self.unpack_time(self["SolarHiTime"])
 
-        self['UVHiDay'] /= 10
-        self['UVHiTime'] = self.unpack_time(self['UVHiTime'])
-        self['UVHiMonth'] /= 10
-        self['UVHiYear'] /= 10
+        self["UVHiDay"] /= 10
+        self["UVHiTime"] = self.unpack_time(self["UVHiTime"])
+        self["UVHiMonth"] /= 10
+        self["UVHiYear"] /= 10
 
-        self['RainHiDay'] /= 100
-        self['RainHiTime'] = self.unpack_time(self['RainHiTime'])
-        self['RainHiHour'] /= 100
-        self['RainHiMonth'] /= 100
-        self['RainHiYear'] /= 100
+        self["RainHiDay"] /= 100
+        self["RainHiTime"] = self.unpack_time(self["RainHiTime"])
+        self["RainHiHour"] /= 100
+        self["RainHiMonth"] /= 100
+        self["RainHiYear"] /= 100
 
     def unpack_time(self, time):
-        '''Given a packed time field, unpack and return "HH:MM" string.'''
+        """Given a packed time field, unpack and return "HH:MM" string."""
         # format: HHMM, and space padded on the left.ex: "601" is 6:01 AM
         return "%02d:%02d" % divmod(time, 100)  # covert to "06:01"
 
+
 class ArchiveDataParserRevB(DataParser):
-    '''Parse data returned by the 'LOOP' command. It contains all of the
-    real-time data that can be read from the Davis VantagePro2.'''
+    """Parse data returned by the 'LOOP' command. It contains all of the
+    real-time data that can be read from the Davis VantagePro2."""
 
     ARCHIVE_FORMAT = (
-        ('DateStamp',      'H'), ('TimeStamp',   'H'), ('TempOut',      'h'),
-        ('TempOutHi',      'h'), ('TempOutLow',  'h'), ('RainRate',     'H'),
-        ('RainRateHi',     'H'), ('Barometer',   'H'), ('SolarRad',     'H'),
-        ('WindSamps',      'H'), ('TempIn',      'H'), ('HumIn',        'B'),
-        ('HumOut',         'B'), ('WindAvg',     'B'), ('WindHi',       'B'),
-        ('WindHiDir',      'B'), ('WindAvgDir',  'B'), ('UV',           'B'),
-        ('ETHour',         'B'), ('SolarRadHi',  'H'), ('UVHi',         'B'),
-        ('ForecastRuleNo', 'B'), ('LeafTemps',  '2s'), ('LeafWetness', '2s'),
-        ('SoilTemps',     '4s'), ('RecType',     'B'), ('ExtraHum',    '2s'),
-        ('ExtraTemps',    '3s'), ('SoilMoist',  '4s'),
+        ("DateStamp", "H"),
+        ("TimeStamp", "H"),
+        ("TempOut", "h"),
+        ("TempOutHi", "h"),
+        ("TempOutLow", "h"),
+        ("RainRate", "H"),
+        ("RainRateHi", "H"),
+        ("Barometer", "H"),
+        ("SolarRad", "H"),
+        ("WindSamps", "H"),
+        ("TempIn", "H"),
+        ("HumIn", "B"),
+        ("HumOut", "B"),
+        ("WindAvg", "B"),
+        ("WindHi", "B"),
+        ("WindHiDir", "B"),
+        ("WindAvgDir", "B"),
+        ("UV", "B"),
+        ("ETHour", "B"),
+        ("SolarRadHi", "H"),
+        ("UVHi", "B"),
+        ("ForecastRuleNo", "B"),
+        ("LeafTemps", "2s"),
+        ("LeafWetness", "2s"),
+        ("SoilTemps", "4s"),
+        ("RecType", "B"),
+        ("ExtraHum", "2s"),
+        ("ExtraTemps", "3s"),
+        ("SoilMoist", "4s"),
     )
 
     def __init__(self, data):
         super(ArchiveDataParserRevB, self).__init__(data, self.ARCHIVE_FORMAT)
-        self['raw_datestamp'] = bytes_to_binary(self.raw_bytes[0:4])
-        self['Datetime'] = unpack_dmp_date_time(self['DateStamp'],
-                                                self['TimeStamp'])
-        del self['DateStamp']
-        del self['TimeStamp']
-        self['TempOut'] = self['TempOut'] / 10
-        self['TempOutHi'] = self['TempOutHi'] / 10
-        self['TempOutLow'] = self['TempOutLow'] / 10
-        self['Barometer'] = self['Barometer'] / 1000
-        self['TempIn'] = self['TempIn'] / 10
-        self['UV'] = self['UV'] / 10
-        self['UVHi'] = self['UVHi'] / 10
-        self['ETHour'] = self['ETHour'] / 1000
-        self['RainRate'] = self['RainRate'] / 100
-        self['RainRateHi'] = self['RainRateHi'] / 100
-        '''
+        self["raw_datestamp"] = bytes_to_binary(self.raw_bytes[0:4])
+        self["Datetime"] = unpack_dmp_date_time(self["DateStamp"], self["TimeStamp"])
+        del self["DateStamp"]
+        del self["TimeStamp"]
+        self["TempOut"] = self["TempOut"] / 10
+        self["TempOutHi"] = self["TempOutHi"] / 10
+        self["TempOutLow"] = self["TempOutLow"] / 10
+        self["Barometer"] = self["Barometer"] / 1000
+        self["TempIn"] = self["TempIn"] / 10
+        self["UV"] = self["UV"] / 10
+        self["UVHi"] = self["UVHi"] / 10
+        self["ETHour"] = self["ETHour"] / 1000
+        self["RainRate"] = self["RainRate"] / 100
+        self["RainRateHi"] = self["RainRateHi"] / 100
+        """
         self['WindHiDir'] = int(self['WindHiDir'] * 22.5)
         self['WindAvgDir'] = int(self['WindAvgDir'] * 22.5)
-        '''
-        SoilTempsValues = struct.unpack(b'4B', self['SoilTemps'])
-        self['SoilTemps'] = tuple((t - 90) for t in SoilTempsValues)
+        """
+        SoilTempsValues = struct.unpack(b"4B", self["SoilTemps"])
+        self["SoilTemps"] = tuple((t - 90) for t in SoilTempsValues)
 
-        self['ExtraHum'] = struct.unpack(b'2B', self['ExtraHum'])
-        self['SoilMoist'] = struct.unpack(b'4B', self['SoilMoist'])
-        LeafTempsValues = struct.unpack(b'2B', self['LeafTemps'])
-        self['LeafTemps'] = tuple((t - 90) for t in LeafTempsValues)
-        self['LeafWetness'] = struct.unpack(b'2B', self['LeafWetness'])
-        ExtraTempsValues = struct.unpack(b'3B', self['ExtraTemps'])
-        self['ExtraTemps'] = tuple((t - 90) for t in ExtraTempsValues)
+        self["ExtraHum"] = struct.unpack(b"2B", self["ExtraHum"])
+        self["SoilMoist"] = struct.unpack(b"4B", self["SoilMoist"])
+        LeafTempsValues = struct.unpack(b"2B", self["LeafTemps"])
+        self["LeafTemps"] = tuple((t - 90) for t in LeafTempsValues)
+        self["LeafWetness"] = struct.unpack(b"2B", self["LeafWetness"])
+        ExtraTempsValues = struct.unpack(b"3B", self["ExtraTemps"])
+        self["ExtraTemps"] = tuple((t - 90) for t in ExtraTempsValues)
         self.tuple_to_dict("SoilTemps")
         self.tuple_to_dict("LeafTemps")
         self.tuple_to_dict("ExtraTemps")
@@ -430,7 +741,9 @@ class ArchiveDataParserRevB(DataParser):
 
 class DmpHeaderParser(DataParser):
     DMP_FORMAT = (
-        ('Pages',   'H'),  ('Offset',   'H'),  ('CRC',     'H'),
+        ("Pages", "H"),
+        ("Offset", "H"),
+        ("CRC", "H"),
     )
 
     def __init__(self, data):
@@ -439,8 +752,10 @@ class DmpHeaderParser(DataParser):
 
 class DmpPageParser(DataParser):
     DMP_FORMAT = (
-        ('Index',   'B'),  ('Records',   '260s'),  ('unused',     '4B'),
-        ('CRC',   'H'),
+        ("Index", "B"),
+        ("Records", "260s"),
+        ("unused", "4B"),
+        ("CRC", "H"),
     )
 
     def __init__(self, data):
@@ -448,32 +763,39 @@ class DmpPageParser(DataParser):
 
 
 def pack_dmp_date_time(d):
-    '''Pack `datetime` to DateStamp and TimeStamp VantagePro2 with CRC.'''
+    """Pack `datetime` to DateStamp and TimeStamp VantagePro2 with CRC."""
     vpdate = d.day + d.month * 32 + (d.year - 2000) * 512
     vptime = 100 * d.hour + d.minute
-    data = struct.pack(b'HH', vpdate, vptime)
+    data = struct.pack(b"HH", vpdate, vptime)
     return VantageProCRC(data).data_with_checksum
 
 
 def unpack_dmp_date_time(date, time):
-    '''Unpack `date` and `time` to datetime'''
-    if date != 0xffff and time != 0xffff:
-        day = date & 0x1f                     # 5 bits
-        month = (date >> 5) & 0x0f            # 4 bits
-        year = ((date >> 9) & 0x7f) + 2000    # 7 bits
+    """Unpack `date` and `time` to datetime"""
+    if date != 0xFFFF and time != 0xFFFF:
+        day = date & 0x1F  # 5 bits
+        month = (date >> 5) & 0x0F  # 4 bits
+        year = ((date >> 9) & 0x7F) + 2000  # 7 bits
         hour, min_ = divmod(time, 100)
         return datetime(year, month, day, hour, min_)
 
 
 def pack_datetime(dtime):
-    '''Returns packed `dtime` with CRC.'''
-    data = struct.pack(b'>BBBBBB', dtime.second, dtime.minute,
-                       dtime.hour, dtime.day, dtime.month, dtime.year - 1900)
+    """Returns packed `dtime` with CRC."""
+    data = struct.pack(
+        b">BBBBBB",
+        dtime.second,
+        dtime.minute,
+        dtime.hour,
+        dtime.day,
+        dtime.month,
+        dtime.year - 1900,
+    )
     return VantageProCRC(data).data_with_checksum
 
 
 def unpack_datetime(data):
-    '''Return unpacked datetime `data` and check CRC.'''
+    """Return unpacked datetime `data` and check CRC."""
     VantageProCRC(data).check()
-    s, m, h, day, month, year = struct.unpack(b'>BBBBBB', data[:6])
+    s, m, h, day, month, year = struct.unpack(b">BBBBBB", data[:6])
     return datetime(year + 1900, month, day, h, m, s)
