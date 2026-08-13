@@ -3,8 +3,8 @@ requires = ["setuptools >= 61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "PyVantagePro_MarcoGos"
-version = "0.3.28"
+name = "pyvantagepro"
+version = "2026.08.01"
 authors = [
   { name="Salem Harrache", email="salem.harrache@gmail.com" },
   { name="Marco Gosselink", email="pypi@famgosselink.nl" },
@@ -32,5 +32,5 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MarcoGos/PyVantagePro"
-Issues = "https://github.com/MarcoGos/PyVantagePro/issues"
+Homepage = "https://github.com/trooperthorn/PyVantagePro"
+Issues = "https://github.com/trooperthorn/PyVantagePro/issues"
