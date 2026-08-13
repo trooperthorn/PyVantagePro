@@ -1,14 +1,19 @@
 PyVantagePro
 ============
 
-.. image:: https://pypip.in/v/PyVantagePro/badge.png
-   :target: https://crate.io/package/PyVantagePro
-.. image:: https://pypip.in/d/PyVantagePro/badge.png
-   :target: https://crate.io/packages/PyVantagePro
-.. image:: https://travis-ci.org/SalemHarrache/PyVantagePro.png?branch=master
-   :target: https://travis-ci.org/SalemHarrache/PyVantagePro
 
+USES LOOP1 - *ugh*
 
+TODO: 
+
+* Bring this back to life. The original project links broke and its in Archival Status
+* Refactor for Loop2, a decade long avilable connection method
+* Update Python2 to Python3
+* Have AI check and verify against the Serial commands.
+
+https://pyvantagepro.readthedocs.io/en/latest/
+Repository:
+https://github.com/LionelDarras/PyVantagePro
 
 PyVantagePro is a python project which aims to make the communication with
 weather stations Davis VantagePro2 easier and funnier...i.e. more Pythonic.
